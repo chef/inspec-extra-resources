@@ -1,0 +1,8 @@
+name: inspec-extra-resources
+title: InSpec Extra Resources
+maintainer: Chef Software, Inc.
+copyright: Chef Software, Inc.
+copyright_email: support@chef.io
+license: Apache-2.0
+summary: This project is an InSpec resource pack containing new resources for supported OSes. A resource pack is used instead of commiting directly to InSpec to make the resources available to all supported versions of InSpec.
+version: 1.0.0
