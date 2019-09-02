@@ -21,6 +21,10 @@ class Plist < Inspec.resource(1)
   end
 
   def exists?
+    if @path =~ /\$HOME/
+      expand_home = inspec.command('echo $HOME').stdout.strip
+      return inspec.file(@path.gsub('$HOME', expand_home)).exist?
+    end
     inspec.file(@path).exist?
   end
 
@@ -33,7 +37,8 @@ class Plist < Inspec.resource(1)
   def xpath_value
     raise Inspec::Exceptions::ResourceFailed ':xpath must be specified in options hash to use xpath_value' unless @xpath
     load_xml
-    @xml_data.xpath(@xpath)
+    result = @xml_data.xpath(@xpath)
+    result.respond_to?(:text) ? result.text : result
   end
 
   private

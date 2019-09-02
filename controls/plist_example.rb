@@ -27,3 +27,15 @@ control 'Xpath example' do
     its('xpath_value') { should eq 'true' }
   end
 end
+
+control 'Another xpath example' do
+  describe plist('/Library/Preferences/com.apple.loginwindow.plist', xpath: '/plist/dict/key[text()=\'LoginwindowText\']/following-sibling::*[1]/text()') do
+    it { should exist }
+    its("xpath_value") { should match(/^.+/) }
+  end
+
+  describe plist('$HOME/Library/Preferences/com.apple.systemuiserver.plist', xpath: '/plist/dict/key[.=\'menuExtras\']/following-sibling::*[1]/string[.=\'/System/Library/CoreServices/Menu Extras/AirPort.menu\']/text()') do
+    it { should exist }
+    its("xpath_value") { should cmp '/System/Library/CoreServices/Menu Extras/AirPort.menu' }
+  end
+end
