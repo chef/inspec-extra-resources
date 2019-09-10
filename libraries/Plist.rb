@@ -46,7 +46,7 @@ class Plist < Inspec.resource(1)
   def load_json
     begin
       @json_data ||= JSON.parse(inspec.command("plutil -convert json -o - #{@path}").stdout) 
-    rescue e
+    rescue => e
       raise Inspec::Exceptions::ResourceFailed, "Failed to read plist data for '#{@path}': #{e.message}"
     end
   end
@@ -54,7 +54,7 @@ class Plist < Inspec.resource(1)
   def load_xml
     begin
       @xml_data ||= Nokogiri::XML.parse(inspec.command("plutil -convert xml1 -o - #{@path}").stdout)
-    rescue e
+    rescue => e
       raise Inspec::Exceptions::ResourceFailed, "Failed to read plist data for '#{@path}': #{e.message}"
     end
   end
