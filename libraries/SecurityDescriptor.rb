@@ -60,6 +60,8 @@ class SecurityDescriptor < Inspec.resource(1)
     return group_sids[0][2] unless group_sids.empty?
     user_sids = inspec.command("wmic useraccount where 'Name=\"#{entity_name}\"' get Name\",\"SID /format:csv").stdout.strip.split("\r\n\r\n")[1..-1].map { |entry| entry.split(',') }
     return user_sids[0][2] unless user_sids.empty?
+    service_sids = inspec.command("sc.exe showSid \"#{entity_name}\" | Select-String -Pattern Service").stdout.strip.split("\r\n\r\n").map { |entry| entry.split(': ') }
+    return service_sids[0][1] unless service_sids.empty?
     entity_name
   end
 end
