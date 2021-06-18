@@ -51,26 +51,26 @@ class RegistrySecurityDescriptor < Inspec.resource(1)
     'KeyWow6432Key' =>                       0b1000000000,
     'KeyWow6464Key' =>                        0b100000000,
     'KeyWow64Res' =>                         0b1100000000,
-    'KeyWrite' =>                     0b00000000000000110
+    'KeyWrite' =>                     0b00000000000000110,
   }.freeze
 
-  def initialize(path, options = {})
+  def initialize(path, _options = {})
     @path = path
     @trustee_access_mask = nil
   end
 
   def permissions
     fetch_results
-    return nil unless @trustee_access_mask
+    return unless @trustee_access_mask
     results = {}
     @trustee_access_mask.each do |trusteesid, accessmask|
       accessrights = {}
-      ACCESS_RIGHTS_BINARY.each do |k,v|
-        if accessmask.to_i & v == 0
-          accessrights[k] = 0
-        else
-          accessrights[k] = 1
-        end
+      ACCESS_RIGHTS_BINARY.each do |k, v|
+        accessrights[k] = if accessmask.to_i & v == 0
+                            0
+                          else
+                            1
+                          end
       end
       results[trusteesid] = accessrights
     end
@@ -79,10 +79,10 @@ class RegistrySecurityDescriptor < Inspec.resource(1)
 
   def permissions_for_trustee(trustee)
     fetch_results
-    return nil unless @trustee_access_mask || trustee
+    return unless @trustee_access_mask || trustee
     results = {}
     accessmask = @trustee_access_mask[trustee]
-    ACCESS_RIGHTS_BINARY.each do |k,v|
+    ACCESS_RIGHTS_BINARY.each do |k, v|
       results[k] = (accessmask.to_i & v == 0) ? 0 : 1
     end
     results
@@ -92,27 +92,28 @@ class RegistrySecurityDescriptor < Inspec.resource(1)
     fetch_results
     return [] unless @trustee_access_mask
     trustees = []
-    @trustee_access_mask.each do |trusteesid, accessmask|
+    @trustee_access_mask.each do |trusteesid, _accessmask|
       trustees.push(trusteesid)
     end
     trustees
   end
 
   private
+
   def fetch_results
     return if @trustee_access_mask
-    sddl = inspec.powershell("(Get-Acl #{@path}).SDDL").stdout.strip.gsub("\r\n","")
-    raise "The provided Registry Key '#{@path}' does not have an SDDL associated." if sddl == ""
+    sddl = inspec.powershell("(Get-Acl #{@path}).SDDL").stdout.strip.gsub("\r\n", '')
+    raise "The provided Registry Key '#{@path}' does not have an SDDL associated." if sddl == ''
     @trustee_access_mask = {}
     access_details = inspec.powershell("(Invoke-CimMethod Win32_SecurityDescriptorHelper -MethodName SDDLToWin32SD -Arguments @{ SDDL = '#{sddl}' }).Descriptor.DACL | Select @{Name=\"SID\";Expression={$_.Trustee.SIDString}},AccessMask").stdout.strip.split("\r\n")[2..-1].map { |entry| entry.split }
     access_details.each do |access_detail|
       trusteesid = access_detail[0]
       accessmask = access_detail[1]
-      if @trustee_access_mask.key?(trusteesid) && @trustee_access_mask[trusteesid]
-        @trustee_access_mask[trusteesid] = (accessmask.to_i + @trustee_access_mask[trusteesid].to_i).to_s
-      else
-        @trustee_access_mask[trusteesid] = accessmask
-      end
+      @trustee_access_mask[trusteesid] = if @trustee_access_mask.key?(trusteesid) && @trustee_access_mask[trusteesid]
+                                           (accessmask.to_i + @trustee_access_mask[trusteesid].to_i).to_s
+                                         else
+                                           accessmask
+                                         end
     end
   end
 end
