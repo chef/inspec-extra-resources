@@ -12,7 +12,7 @@ class SecurityIdentifier < Inspec.resource(1)
     supported_opt_keys = [:user, :group, :unspecified]
     raise "Invalid security_identifier param '#{opts}'. Please pass a hash with these supported keys: #{supported_opt_keys}" unless opts.respond_to?(:keys)
     raise "Unsupported security_identifier options '#{opts.keys - supported_opt_keys}'. Supported keys: #[supported_opt_keys]" unless (opts.keys - supported_opt_keys).empty?
-    raise 'Specifying more than one of :user :group or :unspecified for security_identifier is not supported' unless opts.keys and (opts.keys & supported_opt_keys).length == 1
+    raise 'Specifying more than one of :user :group or :unspecified for security_identifier is not supported' unless opts.keys && ((opts.keys & supported_opt_keys).length == 1)
     if opts[:user]
       @type = :user
       @name = opts[:user]
