@@ -17,7 +17,7 @@ class Plist < Inspec.resource(1)
   end
 
   def to_s
-    "plist #{@path}" + (@xpath ? " with xpath: #{@xpath}" : '') 
+    "plist #{@path}" + (@xpath ? " with xpath: #{@xpath}" : '')
   end
 
   def exists?
@@ -28,7 +28,7 @@ class Plist < Inspec.resource(1)
     inspec.file(@path).exist?
   end
 
-  def method_missing(*args) 
+  def method_missing(*args)
     load_json
     required_key = args[0].is_a?(Array) ? args[0].map { |x| x.to_s } : args[0].to_s
     @json_data.dig(*required_key)
@@ -45,7 +45,7 @@ class Plist < Inspec.resource(1)
 
   def load_json
     begin
-      @json_data ||= JSON.parse(inspec.command("plutil -convert json -o - #{@path}").stdout) 
+      @json_data ||= JSON.parse(inspec.command("plutil -convert json -o - #{@path}").stdout)
     rescue => e
       raise Inspec::Exceptions::ResourceFailed, "Failed to read plist data for '#{@path}': #{e.message}"
     end
