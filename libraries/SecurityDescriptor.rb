@@ -56,10 +56,12 @@ class SecurityDescriptor < Inspec.resource(1)
   end
 
   def get_sid(entity_name)
-    group_sids = inspec.command("wmic group where 'Name=\"#{entity_name}\"' get Name\",\"SID /format:csv").stdout.strip.split("\r\n\r\n")[1..-1].map { |entry| entry.split(',') }
-    return group_sids[0][2] unless group_sids.empty?
-    user_sids = inspec.command("wmic useraccount where 'Name=\"#{entity_name}\"' get Name\",\"SID /format:csv").stdout.strip.split("\r\n\r\n")[1..-1].map { |entry| entry.split(',') }
-    return user_sids[0][2] unless user_sids.empty?
+    # replacing wmic with Get-LocalGroup and Get-LocalUser as it is deprecated in windows 10/11.
+    # For more information: https://techcommunity.microsoft.com/blog/windows-itpro-blog/wmi-command-line-wmic-utility-deprecation-next-steps/4039242#
+    group_sids = inspec.command("Get-LocalGroup | Where-Object { $_.Name -eq '#{entity_name}' } | Select-Object Name,SID | ConvertTo-Csv -NoTypeInformation").stdout.strip.split("\r\n").drop(1).map { |entry| entry.split(',').map { |e| e.gsub('"', '') } }
+    return group_sids[0][1] unless group_sids.empty?
+    user_sids = inspec.command("Get-LocalUser | Where-Object { $_.Name -eq '#{entity_name}' } | Select-Object Name,SID | ConvertTo-Csv -NoTypeInformation").stdout.strip.split("\r\n").drop(1).map { |entry| entry.split(',').map { |e| e.gsub('"', '') } }
+    return user_sids[0][1] unless user_sids.empty?
     service_sids = inspec.command("sc.exe showSid \"#{entity_name}\" | Select-String -Pattern Service").stdout.strip.split("\r\n\r\n").map { |entry| entry.split(': ') }
     return service_sids[0][1] unless service_sids.empty?
     entity_name
