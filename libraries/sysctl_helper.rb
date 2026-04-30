@@ -15,7 +15,7 @@ class SysctlHelper < Inspec.resource(1)
     sysctl_dirs = ['/lib/sysctl.d/', '/usr/lib/sysctl.d/', '/usr/local/lib/sysctl.d/', '/run/sysctl.d/', '/etc/sysctl.d/']
     
     # More efficient: Check all directories in one command instead of individual calls
-    find_cmd = "sudo find #{sysctl_dirs.join(' ')} -maxdepth 1 -type f -name '*.conf' 2>/dev/null"
+    find_cmd = "find #{sysctl_dirs.join(' ')} -maxdepth 1 -type f -name '*.conf' 2>/dev/null"
     inspec.command(find_cmd).stdout.each_line do |line|
       filepath = line.strip
       next if filepath.empty?
@@ -27,14 +27,14 @@ class SysctlHelper < Inspec.resource(1)
     sorted_files = config_map.keys.sort.map { |name| config_map[name] }
 
     # 3. Append /etc/sysctl.conf (Legacy override, processed last)
-    # Using sudo to check existence
-    if inspec.command("sudo test -f /etc/sysctl.conf").exit_status == 0
+    # Using test to check existence
+    if inspec.command("test -f /etc/sysctl.conf").exit_status == 0
       sorted_files << '/etc/sysctl.conf'
     end
 
     # 4. Check UFW (Highest Precedence - overrides even sysctl)
     ufw_config = nil
-    ufw_cmd = inspec.command("sudo grep '^IPT_SYSCTL=' /etc/default/ufw")
+    ufw_cmd = inspec.command("grep '^IPT_SYSCTL=' /etc/default/ufw")
     if ufw_cmd.exit_status == 0
        ufw_path = ufw_cmd.stdout.split('=')[1].strip
        if ufw_path && !ufw_path.empty?
@@ -51,8 +51,8 @@ class SysctlHelper < Inspec.resource(1)
     all_configs = []
     
     sorted_files.each do |file_path|
-      # Use sudo cat to read content to avoid permission issues
-      content = inspec.command("sudo cat #{file_path}").stdout
+      # Use cat to read content to avoid permission issues
+      content = inspec.command("cat #{file_path}").stdout
       
       content.each_line do |line|
         # Match parameter definition (ignoring comments handled by regex implementation? No, strict line/comment check is better)
