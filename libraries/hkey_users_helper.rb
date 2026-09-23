@@ -6,8 +6,8 @@
 # LSA APIs (LsaEnumerateLogonSessions / LsaGetLogonSessionData) and filtered by
 # logon-session type so only genuine interactive logons are considered. This is
 # authoritative and matches CIS-CAT Assessor, unlike a "Volatile Environment"
-# heuristic. Results are cached briefly to avoid re-running the enumeration for
-# every section 19 control.
+# heuristic. The result is memoized per instance so it is computed once per
+# section 19 control.
 class HkeyUsersHelper < Inspec.resource(1)
   name 'hkey_users_helper'
   supports platform: 'windows'
@@ -40,36 +40,19 @@ class HkeyUsersHelper < Inspec.resource(1)
 
   private
 
-  # Process-private cache shared across control instances. Mirrors the 3-minute
-  # expiry of UserHiveAudit.ps1's Get-CachedHivesToInspect, but keeps the data in
-  # memory (never on disk) so it cannot be poisoned via a shared %TEMP% file.
-  CACHE_EXPIRY_SECONDS = 180
-  @enumeration_cache = {}
-
-  class << self
-    attr_reader :enumeration_cache
-  end
-
+  # Memoized per instance. Repeated section 19 controls are further de-duplicated
+  # per target by train's command cache (identical script string), so the LSA
+  # enumeration runs once per node. Nothing is written to disk (unlike
+  # UserHiveAudit.ps1's %TEMP% cache), so there is no shared-temp-file poisoning
+  # surface.
   def enumerate
     @enumerate ||= begin
-      key = [@include_local_accounts, @include_entra_id_accounts]
-      cached = self.class.enumeration_cache[key]
-      if cached && (Time.now - cached[:at]) < CACHE_EXPIRY_SECONDS
-        cached[:value]
-      else
-        value = run_enumeration
-        self.class.enumeration_cache[key] = { value: value, at: Time.now } unless value[:error]
-        value
-      end
+      result = inspec.powershell(ps_switches + PS_ENUMERATION_SCRIPT)
+      error = result.exit_status != 0 || (result.stdout&.include?('HKU_ENUMERATION_ERROR') || false)
+      hives = error ? [] : (result.stdout || '').to_s.split(/\r?\n/).map(&:strip).reject(&:empty?).map { |sid| "HKEY_USERS\\#{sid}" }
+
+      { hives: hives, error: error }
     end
-  end
-
-  def run_enumeration
-    result = inspec.powershell(ps_switches + PS_ENUMERATION_SCRIPT)
-    error = result.exit_status != 0 || (result.stdout&.include?('HKU_ENUMERATION_ERROR') || false)
-    hives = error ? [] : (result.stdout || '').to_s.split(/\r?\n/).map(&:strip).reject(&:empty?).map { |sid| "HKEY_USERS\\#{sid}" }
-
-    { hives: hives, error: error }
   end
 
   def ps_switches
