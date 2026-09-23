@@ -40,14 +40,36 @@ class HkeyUsersHelper < Inspec.resource(1)
 
   private
 
+  # Process-private cache shared across control instances. Mirrors the 3-minute
+  # expiry of UserHiveAudit.ps1's Get-CachedHivesToInspect, but keeps the data in
+  # memory (never on disk) so it cannot be poisoned via a shared %TEMP% file.
+  CACHE_EXPIRY_SECONDS = 180
+  @enumeration_cache = {}
+
+  class << self
+    attr_reader :enumeration_cache
+  end
+
   def enumerate
     @enumerate ||= begin
-      result = inspec.powershell(ps_switches + PS_ENUMERATION_SCRIPT)
-      error = result.exit_status != 0 || (result.stdout&.include?('HKU_ENUMERATION_ERROR') || false)
-      hives = error ? [] : (result.stdout || '').to_s.split(/\r?\n/).map(&:strip).reject(&:empty?).map { |sid| "HKEY_USERS\\#{sid}" }
-
-      { hives: hives, error: error }
+      key = [@include_local_accounts, @include_entra_id_accounts]
+      cached = self.class.enumeration_cache[key]
+      if cached && (Time.now - cached[:at]) < CACHE_EXPIRY_SECONDS
+        cached[:value]
+      else
+        value = run_enumeration
+        self.class.enumeration_cache[key] = { value: value, at: Time.now } unless value[:error]
+        value
+      end
     end
+  end
+
+  def run_enumeration
+    result = inspec.powershell(ps_switches + PS_ENUMERATION_SCRIPT)
+    error = result.exit_status != 0 || (result.stdout&.include?('HKU_ENUMERATION_ERROR') || false)
+    hives = error ? [] : (result.stdout || '').to_s.split(/\r?\n/).map(&:strip).reject(&:empty?).map { |sid| "HKEY_USERS\\#{sid}" }
+
+    { hives: hives, error: error }
   end
 
   def ps_switches
@@ -59,13 +81,28 @@ class HkeyUsersHelper < Inspec.resource(1)
     $ErrorActionPreference = 'Stop'
     try {
       # The SIDs of local accounts begin with the machine SID; capture it so those
-      # accounts can be excluded. On systems without a local SAM (e.g. domain
-      # controllers) there is no machine SID and local-account filtering is skipped.
+      # accounts can be excluded. Distinguish a domain controller (no local SAM, so
+      # there are no local-account hives to filter) from a genuine lookup failure:
+      # in the latter case we must not silently include local-user hives, so we fail
+      # closed by surfacing an enumeration error.
       $machineSid_ = $null
+      $isDomainController = $false
       try {
-        $lu = @(Get-LocalUser -ErrorAction SilentlyContinue)
+        $isDomainController = ((Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).ProductType -eq 2)
+      } catch { $isDomainController = $false }
+
+      try {
+        $lu = @(Get-LocalUser -ErrorAction Stop)
         if ($lu.Count -gt 0 -and $lu[0].SID) { $machineSid_ = $lu[0].SID.AccountDomainSid.Value + '-' }
       } catch { $machineSid_ = $null }
+
+      # Local-account filtering is requested (the default) but the machine SID could
+      # not be resolved on a system that has a local SAM (i.e. not a domain
+      # controller): fail closed instead of leaking local-user hives into the audit.
+      if (-not $IncludeLocalAccounts -and [string]::IsNullOrEmpty($machineSid_) -and -not $isDomainController) {
+        Write-Output 'HKU_ENUMERATION_ERROR'
+        exit 1
+      }
 
       function IsLocalUserAccount([string] $userSid) {
         if ([string]::IsNullOrEmpty($machineSid_)) { return $false }
@@ -167,7 +204,7 @@ class HkeyUsersHelper < Inspec.resource(1)
               EntryPoint="LsaEnumerateLogonSessions",
               CallingConvention=System.Runtime.InteropServices.CallingConvention.StdCall)]
           public static extern int LsaEnumerateLogonSessions(
-              ref int LogonSessionCount,
+              ref uint LogonSessionCount,
               ref System.IntPtr LogonSessionList) ;
 
           [System.Runtime.InteropServices.DllImportAttribute(
@@ -276,45 +313,13 @@ class HkeyUsersHelper < Inspec.resource(1)
         return $result
       }
 
-      # Cache the hive list briefly so repeated section 19 controls don't re-enumerate.
-      function Get-CachedHivesToInspect {
-        param(
-          [switch] $IncludeLocalAccounts,
-          [switch] $IncludeEntraIdAccounts,
-          [int] $CacheExpiryMinutes = 3
-        )
-
-        # Cache key includes the account filters so results never leak between settings.
-        $flags = "L$([int][bool]$IncludeLocalAccounts)E$([int][bool]$IncludeEntraIdAccounts)"
-        $cachefilepath = Join-Path $env:TEMP ("CIS_InSpec_UserHiveList_" + $flags + ".txt")
-
-        $bRefreshCache = $true
-        $cachefilecontent = $null
-        $cachefile = Get-Item $cachefilepath -ErrorAction SilentlyContinue
-
-        if ($null -ne $cachefile -and $cachefile.LastWriteTime.AddMinutes($CacheExpiryMinutes) -ge [DateTime]::Now) {
-          $bRefreshCache = $false
-          $cachefilecontent = @(Get-Content $cachefilepath -ErrorVariable readerror)
-          if ($readerror.Count -gt 0) {
-            $bRefreshCache = $true
-          } else {
-            foreach ($sid in $cachefilecontent) {
-              if (-not $sid.StartsWith("S-1-")) { $bRefreshCache = $true }
-            }
-          }
-        }
-
-        if ($bRefreshCache) {
-          $cachefilecontent = @( Get-HivesToInspect -IncludeLocalAccounts:$IncludeLocalAccounts -IncludeEntraIdAccounts:$IncludeEntraIdAccounts )
-          try {
-            $cachefilecontent | Out-File -Encoding ascii -LiteralPath $cachefilepath -Force -ErrorAction SilentlyContinue
-          } catch { }
-        }
-
-        return $cachefilecontent
-      }
-
-      $sids = @( Get-CachedHivesToInspect -IncludeLocalAccounts:$IncludeLocalAccounts -IncludeEntraIdAccounts:$IncludeEntraIdAccounts )
+      # No on-disk caching here. UserHiveAudit.ps1 caches to a shared %TEMP% file
+      # because CIS-CAT launches it as a separate process per check; this library
+      # runs every control in a single InSpec process, so results are memoized
+      # in-process (see the Ruby `enumerate` method) instead. That preserves the
+      # cross-control performance benefit without a predictable, world-writable
+      # cache file that a lower-privileged process could poison.
+      $sids = @( Get-HivesToInspect -IncludeLocalAccounts:$IncludeLocalAccounts -IncludeEntraIdAccounts:$IncludeEntraIdAccounts )
       $sids | ForEach-Object { Write-Output $_ }
     }
     catch {
