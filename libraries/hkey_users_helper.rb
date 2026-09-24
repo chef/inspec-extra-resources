@@ -42,14 +42,13 @@ class HkeyUsersHelper < Inspec.resource(1)
 
   # Memoized per instance. Repeated section 19 controls are further de-duplicated
   # per target by train's command cache (identical script string), so the LSA
-  # enumeration runs once per node. Nothing is written to disk (unlike
-  # UserHiveAudit.ps1's %TEMP% cache), so there is no shared-temp-file poisoning
-  # surface.
+  # enumeration runs at most once per node.
   def enumerate
     @enumerate ||= begin
       result = inspec.powershell(ps_switches + PS_ENUMERATION_SCRIPT)
-      error = result.exit_status != 0 || (result.stdout&.include?('HKU_ENUMERATION_ERROR') || false)
-      hives = error ? [] : (result.stdout || '').to_s.split(/\r?\n/).map(&:strip).reject(&:empty?).map { |sid| "HKEY_USERS\\#{sid}" }
+      stdout = result.stdout.to_s
+      error = result.exit_status != 0 || stdout.include?('HKU_ENUMERATION_ERROR')
+      hives = error ? [] : stdout.split(/\r?\n/).map { |line| line.to_s.strip }.reject(&:empty?).map { |sid| "HKEY_USERS\\#{sid}" }
 
       { hives: hives, error: error }
     end
@@ -61,6 +60,12 @@ class HkeyUsersHelper < Inspec.resource(1)
   end
 
   PS_ENUMERATION_SCRIPT = <<~'PSSCRIPT'
+    # Runs inside inspec's persistent PowerShell session, so this script must not
+    # leak state into that session: never call `exit`, always restore
+    # $ErrorActionPreference, and guard Add-Type / New-PSDrive so repeated section
+    # 19 controls (and train's own follow-up commands, such as platform UUID
+    # detection via wmic) are not disrupted.
+    $__hku_prevEAP = $ErrorActionPreference
     $ErrorActionPreference = 'Stop'
     try {
       # The SIDs of local accounts begin with the machine SID; capture it so those
@@ -84,7 +89,7 @@ class HkeyUsersHelper < Inspec.resource(1)
       # controller): fail closed instead of leaking local-user hives into the audit.
       if (-not $IncludeLocalAccounts -and [string]::IsNullOrEmpty($machineSid_) -and -not $isDomainController) {
         Write-Output 'HKU_ENUMERATION_ERROR'
-        exit 1
+        return
       }
 
       function IsLocalUserAccount([string] $userSid) {
@@ -94,6 +99,9 @@ class HkeyUsersHelper < Inspec.resource(1)
       }
 
       # LSA logon-session interop (from CIS UserHiveAudit.ps1, authored by Aaron Margosis, Tanium)
+      # Define the interop types only once per persistent session; re-adding an
+      # existing type throws and would break every control after the first.
+      if (-not ([System.Management.Automation.PSTypeName]'NativeMethods').Type) {
       Add-Type -TypeDefinition @'
       public enum SECURITY_LOGON_TYPE {
           UndefinedLogonType = 0,
@@ -205,6 +213,7 @@ class HkeyUsersHelper < Inspec.resource(1)
           public static extern int LsaFreeReturnBuffer(System.IntPtr Buffer) ;
       }
 '@
+      }
 
       # Compatible replacement for [IntPtr]::Add for older PowerShell versions.
       function IntPtrAdd([System.IntPtr] $pointer, [int] $offset) {
@@ -288,10 +297,15 @@ class HkeyUsersHelper < Inspec.resource(1)
           $sessions = $sessions | Where-Object { -not (IsLocalUserAccount -userSid $_.SID) }
         }
 
-        # Ensure the corresponding HKEY_USERS subkey is actually loaded.
-        [void] (New-PSDrive -PSProvider Registry -Name HKU_Script -Root HKEY_USERS -Scope Script)
-        $result = $sessions.SID | Sort-Object -Unique | Where-Object { Test-Path -Path "HKU_Script:\$_" }
-        Remove-PSDrive HKU_Script
+        # Ensure the corresponding HKEY_USERS subkey is actually loaded. Pre-clean
+        # and post-clean the PSDrive so a drive leaked by a previous run in the same
+        # persistent session cannot make New-PSDrive fail.
+        if (Get-PSDrive -Name HKU_Script -ErrorAction SilentlyContinue) {
+          Remove-PSDrive -Name HKU_Script -Force -ErrorAction SilentlyContinue
+        }
+        [void] (New-PSDrive -PSProvider Registry -Name HKU_Script -Root HKEY_USERS -Scope Script -ErrorAction SilentlyContinue)
+        $result = $sessions.SID | Sort-Object -Unique | Where-Object { Test-Path -Path "HKU_Script:\$_" -ErrorAction SilentlyContinue }
+        Remove-PSDrive -Name HKU_Script -Force -ErrorAction SilentlyContinue
 
         return $result
       }
@@ -307,7 +321,9 @@ class HkeyUsersHelper < Inspec.resource(1)
     }
     catch {
       Write-Output 'HKU_ENUMERATION_ERROR'
-      exit 1
+    }
+    finally {
+      $ErrorActionPreference = $__hku_prevEAP
     }
   PSSCRIPT
 end
