@@ -303,7 +303,7 @@ class HkeyUsersHelper < Inspec.resource(1)
         if (Get-PSDrive -Name HKU_Script -ErrorAction SilentlyContinue) {
           Remove-PSDrive -Name HKU_Script -Force -ErrorAction SilentlyContinue
         }
-        [void] (New-PSDrive -PSProvider Registry -Name HKU_Script -Root HKEY_USERS -Scope Script -ErrorAction SilentlyContinue)
+        [void] (New-PSDrive -PSProvider Registry -Name HKU_Script -Root HKEY_USERS -Scope Script -ErrorAction Stop)
         $result = $sessions.SID | Sort-Object -Unique | Where-Object { Test-Path -Path "HKU_Script:\$_" -ErrorAction SilentlyContinue }
         Remove-PSDrive -Name HKU_Script -Force -ErrorAction SilentlyContinue
 
