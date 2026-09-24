@@ -151,8 +151,9 @@ class HkeyUsersHelper < Inspec.resource(1)
       public struct LSA_UNICODE_STRING {
           public short Length;
           public short MaximumLength;
-          [System.Runtime.InteropServices.MarshalAsAttribute(System.Runtime.InteropServices.UnmanagedType.LPWStr)]
-          public string Buffer;
+          // Length-prefixed and not guaranteed NUL-terminated: keep the raw pointer
+          // and decode with Length so marshaling never reads past the LSA buffer.
+          public System.IntPtr Buffer;
       }
 
       [System.Runtime.InteropServices.StructLayoutAttribute(System.Runtime.InteropServices.LayoutKind.Sequential)]
@@ -240,8 +241,13 @@ class HkeyUsersHelper < Inspec.resource(1)
               Write-Error ("LsaGetLogonSessionData failed with NTSTATUS 0x" + $ret.ToString("X8"))
             } else {
               $logonSessionData = [System.Runtime.InteropServices.Marshal]::PtrToStructure($ppLogonSessionData, [type][SECURITY_LOGON_SESSION_DATA])
-              if ($logonSessionData.LogonDomain.Buffer.Length -gt 0 -or $logonSessionData.UserName.Buffer.Length -gt 0) {
-                $UserName = $logonSessionData.LogonDomain.Buffer + "\" + $logonSessionData.UserName.Buffer
+              # LSA_UNICODE_STRING.Length is in bytes; decode explicitly (diagnostic only).
+              $domainLen = [int] $logonSessionData.LogonDomain.Length
+              $userLen = [int] $logonSessionData.UserName.Length
+              if ($domainLen -gt 0 -or $userLen -gt 0) {
+                $domainStr = if ($domainLen -gt 0 -and $logonSessionData.LogonDomain.Buffer -ne [IntPtr]::Zero) { [System.Runtime.InteropServices.Marshal]::PtrToStringUni($logonSessionData.LogonDomain.Buffer, [int]($domainLen / 2)) } else { [String]::Empty }
+                $userStr = if ($userLen -gt 0 -and $logonSessionData.UserName.Buffer -ne [IntPtr]::Zero) { [System.Runtime.InteropServices.Marshal]::PtrToStringUni($logonSessionData.UserName.Buffer, [int]($userLen / 2)) } else { [String]::Empty }
+                $UserName = $domainStr + "\" + $userStr
               } else {
                 $UserName = [String]::Empty
               }
